@@ -1,0 +1,127 @@
+#!/bin/bash
+set -ue
+LANG=C
+LC_ALL=C
+
+##--@--## 引数が3つでなければ異常終了させる
+[ ! 3 = $# ] && exit 1
+
+URI=$1          # URL
+CHAIN=$2        # チェーン名識別子
+STORE=$3        # 店舗名識別子
+MAILTO=${USER}  # メール通知先
+
+PROGNAME=$(basename $0)
+UPDIR=${HOME}/Dropbox/${PROGNAME}/${CHAIN}
+UPFILE=${UPDIR}/${CHAIN}_${STORE}_$(date +%Y%m%d).pdf
+LOGDIR=${HOME}/logs/${PROGNAME}
+LOGDIR=${HOME}/Dropbox/${PROGNAME}/logs
+OLDLOG=${LOGDIR}/${PROGNAME}_$(date +%Y%m --date="1 month ago").log
+NOWLOG=${LOGDIR}/${PROGNAME}_$(date +%Y%m).log
+
+##--@--## ログディレクトリがなければ作成する
+mkdir -p ${LOGDIR}
+
+##--@--## 先月ぶんのログがあればgzip圧縮する
+[ -f ${OLDLOG} ] && gzip ${OLDLOG}
+
+##--@--## 変数URIがhttpで始まっていなければ異常終了させる
+[ ! http:// = $(echo ${URI} | cut -b -7) ] && exit 1
+
+##--@--## 取得対象URIのステータスコードが[23]xx以外だったら異常終了させる
+STATUS=$(curl -LIs -w %{http_code} -o /dev/null ${URI})
+[ ${STATUS} -ge 200 -a ${STATUS} -le 399 ] || exit 1
+
+##--@--## PDFへリンクしているページのLast-Modifiedの日時をUNIXTIMEに変換して変数に格納する
+LASTMOD=$(date +%s --date \
+"$(curl -v ${URI} 2>&1 | \
+grep Last-Modified | \
+cut -d' ' -f 4-7 | \
+awk '{print $3"/"$2"/"$1,$4}' | \
+sed -e "s/Jan/01/;s/Feb/02/;s/Mar/03/;\
+s/Apr/04/;s/May/05/;s/Jun/06/;\
+s/Jul/07/;s/Aug/08/;s/Sep/09/;\
+s/Oct/10/;s/Nov/11/;s/Dec/12/")")
+
+##--@--## 取得対象URIの更新日時をログに記録する
+echo -e "\
+$(LANG=C date "+%Y/%m/%d\t%H:%M:%S")\t\
+${HOSTNAME}\t\
+${PROGNAME}[${$}]:\t\
+${CHAIN}\t\
+${STORE}\t\
+${URI}\t\
+Last-Modified\t\
+$(echo ${LASTMOD} | \
+awk '{print strftime("%Y-%m-%d""\t""%H:%M:%S",$1)}')\t\
+${LASTMOD}" | tee -a ${NOWLOG}
+
+##--@--## 前回実行時の更新日時を変数LAST0に格納する
+LAST0=$(cat ${NOWLOG} | grep ${URI} | tail -n 2 | head -n 1 | awk '{print $NF}')
+##--@--## 今回実行時の更新日時を変数LAST1に格納する
+LAST1=$(cat ${NOWLOG} | grep ${URI} | tail -n 1 | awk '{print $NF}')
+
+##--@--## 前回実行時と更新日時が合致しなければ、PDFにリンクしているページの更新をメール通知する
+if [ ! ${LAST0} = ${LAST1} ];
+then
+  export LANG=ja_JP.utf8      # gmailのnoname対策で文字コードを一時的に日本語にする
+  echo -e "${CHAIN} ${STORE} のページが更新されました\n$(date)\n${URI}" | \
+  mail -s "[${PROGNAME}] $(LANG=C date) Notification" ${MAILTO}
+  export LANG=C               # 文字コードを元に戻す
+fi
+
+##--@--## 巡回先にチラシPDFがリンクされていなければ異常終了させる
+[ ! 0 = $(curl -s ${URI} | grep href | grep pdf > /dev/null ; echo $?) ] && exit 1
+##--@--## すでにまとめチラシが生成されていれば異常終了させる
+[ -f ${UPFILE} ] && exit 1
+##--@--## PDFのURIを変数に格納する
+DIRNAME=$(dirname $(dirname ${URI}) | sed -e "s/\//\\\\\//g")
+PDFURI=()
+PDFURI=($(curl -s ${URI} | \
+nkf -w | \
+grep pdf | \
+awk '{for (i=1;i<=NF;i++) {if ($i ~ /pdf/) IGNORECASE = 1; {print $i}}}' | \
+grep "href" | \
+sed -e "s/href=\"\.\./${DIRNAME}/g;s/\"//g"
+))
+##--@--## リンクされたPDFのURIごとにループさせて巡回取得する
+for A in ${PDFURI[@]}
+do
+  ##--@--## ディレクトリ名に日付を加えたものを ${HOME}/tmp 配下に作成する
+  DATEDIR=$(dirname ${A} | \
+  sed -e "s/$/\/$(date +%Y%m%d)/" | \
+  sed -e "s/http:\//$(echo ${HOME} | \
+  sed -e "s/\//\\\\\//g")\/tmp/")
+  mkdir -p ${DATEDIR}
+  ##--@--## ファイル名を取り出し、${DATEDIR} 配下に保存する
+  BASENAME=$(basename ${A})
+  curl -o ${DATEDIR}/${BASENAME} ${A}
+  ##--@--## ${UPDIR}/プロセスID がなければ作成し、ダウンロードしたPDFファイルをコピーする
+  mkdir -p ${UPDIR}/${$}
+  cp -p ${DATEDIR}/${BASENAME} ${UPDIR}/${$}/
+done
+
+##--@--## PDFを1枚にまとめる
+pdftk ${UPDIR}/${$}/* cat output ${UPFILE}
+
+##--@--## PDFまとめが正常終了したらログに記録し、メール送信と後処理を行う
+if [ 0 = $(echo $?) ];
+then
+##--@--## PDFまとめ結果をログに格納する
+echo -e "\
+$(LANG=C date "+%Y/%m/%d\t%H:%M:%S")\t\
+${HOSTNAME}\t\
+${PROGNAME}[${$}]:\t\
+${CHAIN}\t\
+${STORE}\t\
+$(basename $(dirname ${UPFILE}))/$(basename ${UPFILE})\t\
+PDF Created\t\
+$(md5sum ${UPFILE} | awk '{print $1}')" | tee -a ${NOWLOG}
+##--@--## PDFまとめ結果をメール送信する
+export LANG=ja_JP.utf8      # gmailのnoname対策で文字コードを一時的に日本語にする
+echo -e "${CHAIN} ${STORE} のチラシをDropboxに格納しました\n$(date)\n" | \
+mail -s "[${PROGNAME}] $(LANG=C date) PDF Created" ${MAILTO}
+export LANG=C               # 文字コードを元に戻す
+##--@--## テンポラリディレクトリを削除する
+rm -fr ${UPDIR}/${$} 
+fi
