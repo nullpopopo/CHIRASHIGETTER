@@ -6,21 +6,32 @@ LC_ALL=C
 ##--@--## 引数が3つでなければ異常終了させる
 [ ! 3 = $# ] && exit 1
 
-URI=$1          # URL
-CHAIN=$2        # チェーン名識別子
-STORE=$3        # 店舗名識別子
-MAILTO=${USER}  # メール通知先
+URI=$1                                  # URL
+CHAIN=$2                                # チェーン名識別子
+STORE=$3                                # 店舗名識別子
+MAILTO=${USER}                          # メール通知先
 
 PROGNAME=$(basename $0)
-UPDIR=${HOME}/Dropbox/${PROGNAME}/${CHAIN}
-UPFILE=${UPDIR}/${CHAIN}_${STORE}_$(date +%Y%m%d).pdf
-LOGDIR=${HOME}/logs/${PROGNAME}
-LOGDIR=${HOME}/Dropbox/${PROGNAME}/logs
-OLDLOG=${LOGDIR}/${PROGNAME}_$(date +%Y%m --date="1 month ago").log
-NOWLOG=${LOGDIR}/${PROGNAME}_$(date +%Y%m).log
+FQDN=$(echo ${URI} | awk 'BEGIN {FS="/"} {print $3}')
 
-##--@--## ログディレクトリがなければ作成する
-mkdir -p ${LOGDIR}
+TODAY=$(date +%Y%m%d)
+YDAY=$(date +%Y%m%d --date="1 days ago")
+THISMON=$(date +%Y%m)
+LASTMON=$(date +%Y%m --date="1 month ago")
+
+TMPDIR=${HOME}/tmp
+TMPHEADER=${TMPDIR}/${PROGNAME}_${FQDN}_HEADER_$$
+TMPHTML=${TMPDIR}/${PROGNAME}_${FQDN}_HTML_$$
+
+UPDIR=${HOME}/Dropbox/${PROGNAME}/${CHAIN}
+UPFILE=${UPDIR}/${CHAIN}_${STORE}_${TODAY}.pdf
+LOGDIR=${HOME}/Dropbox/${PROGNAME}/logs
+#LOGDIR=${HOME}/Dropbox/${PROGNAME}/.logs # for debug
+NOWLOG=${LOGDIR}/${PROGNAME}_${THISMON}.log
+OLDLOG=${LOGDIR}/${PROGNAME}_${LASTMON}.log
+
+##--@--## ログディレクトリと一時ファイル用ディレクトリがなければ作成する
+mkdir -p ${LOGDIR} ${TMPDIR}
 
 ##--@--## 先月ぶんのログがあればgzip圧縮する
 [ -f ${OLDLOG} ] && gzip ${OLDLOG}
@@ -32,17 +43,20 @@ mkdir -p ${LOGDIR}
 STATUS=$(curl -LIs -w %{http_code} -o /dev/null ${URI})
 [ ${STATUS} -ge 200 -a ${STATUS} -le 399 ] || exit 1
 
-##--@--## PDFへリンクしているページのLast-Modifiedの日時をUNIXTIMEに変換して変数に格納する
-LASTMOD=$(date +%s --date \
-"$(curl -v ${URI} 2>&1 | \
-grep Last-Modified | \
-cut -d' ' -f 4-7 | \
-awk '{print $3"/"$2"/"$1,$4}' | \
+##--@--## PDFへリンクしているページのヘッダーとコンテンツを一時ファイルに取得する
+curl -LIs ${URI} > ${TMPHEADER}
+curl -Ls ${URI} > ${TMPHTML}
+
+if [ 0 = $(grep ^Last-Modified: ${TMPHEADER} > /dev/null ; echo $?) ]; 
+then
+##--@--## PDFへリンクしているページのLast-Modifiedの日時が取得できれば、これをUNIXTIMEに変換して変数LASTMODに格納する
+LASTMOD=$(date +%s "--date=$(cat ${TMPHEADER} | \
+grep ^Last-Modified: | \
+awk '{print $5"/"$4"/"$3,$6,$7}' | \
 sed -e "s/Jan/01/;s/Feb/02/;s/Mar/03/;\
 s/Apr/04/;s/May/05/;s/Jun/06/;\
 s/Jul/07/;s/Aug/08/;s/Sep/09/;\
 s/Oct/10/;s/Nov/11/;s/Dec/12/")")
-
 ##--@--## 取得対象URIの更新日時をログに記録する
 echo -e "\
 $(LANG=C date "+%Y/%m/%d\t%H:%M:%S")\t\
@@ -55,10 +69,25 @@ Last-Modified\t\
 $(echo ${LASTMOD} | \
 awk '{print strftime("%Y-%m-%d""\t""%H:%M:%S",$1)}')\t\
 ${LASTMOD}" | tee -a ${NOWLOG}
+else
+##--@--## PDFへリンクしているページのLast-Modifiedの日時が取得できない場合は、ファイル TMPHTML のmd5sum値を変数LASTMODに格納する
+LASTMOD=$(md5sum ${TMPHTML} | awk '{print $1}')
+##--@--## 取得対象URIのmd5sumをログに記録する
+echo -e "\
+$(LANG=C date "+%Y/%m/%d\t%H:%M:%S")\t\
+${HOSTNAME}\t\
+${PROGNAME}[${$}]:\t\
+${CHAIN}\t\
+${STORE}\t\
+${URI}\t\
+md5sum\t\
+${LASTMOD}" | tee -a ${NOWLOG}
+fi
 
-##--@--## 前回実行時の更新日時を変数LAST0に格納する
+
+##--@--## 前回実行時のLASTMODを変数LAST0に格納する
 LAST0=$(cat ${NOWLOG} | grep ${URI} | tail -n 2 | head -n 1 | awk '{print $NF}')
-##--@--## 今回実行時の更新日時を変数LAST1に格納する
+##--@--## 今回実行時のLASTMODを変数LAST1に格納する
 LAST1=$(cat ${NOWLOG} | grep ${URI} | tail -n 1 | awk '{print $NF}')
 
 ##--@--## 前回実行時と更新日時が合致しなければ、PDFにリンクしているページの更新をメール通知する
@@ -87,25 +116,42 @@ sed -e "s/href=\"\.\./${DIRNAME}/g;s/\"//g"
 ##--@--## リンクされたPDFのURIごとにループさせて巡回取得する
 for A in ${PDFURI[@]}
 do
-  ##--@--## ディレクトリ名に日付を加えたものを ${HOME}/tmp 配下に作成する
+  ##--@--## PDF格納ディレクトリ名に日付を加えたものを ${HOME}/tmp 配下に作成する
   DATEDIR=$(dirname ${A} | \
-  sed -e "s/$/\/$(date +%Y%m%d)/" | \
+  sed -e "s/$/\/${TODAY}/" | \
   sed -e "s/http:\//$(echo ${HOME} | \
   sed -e "s/\//\\\\\//g")\/tmp/")
   mkdir -p ${DATEDIR}
   ##--@--## ファイル名を取り出し、${DATEDIR} 配下に保存する
   BASENAME=$(basename ${A})
-  curl -o ${DATEDIR}/${BASENAME} ${A}
-  ##--@--## ${UPDIR}/プロセスID がなければ作成し、ダウンロードしたPDFファイルをコピーする
-  mkdir -p ${UPDIR}/${$}
-  cp -p ${DATEDIR}/${BASENAME} ${UPDIR}/${$}/
+  TODAYPDF=${DATEDIR}/${BASENAME}
+  YDAYPDF=$(echo ${DATEDIR} | sed -e "s/${TODAY}/${YDAY}/")/${BASENAME}
+  curl -o ${TODAYPDF} ${A}
+  TODAYPDFSUM=$(md5sum ${TODAYPDF} | awk '{print $1}')
+  YDAYPDFSUM=$(md5sum ${YDAYPDF} | awk '{print $1}')
+  ##--@--## ダウンロードしたファイルのmd5sum値が昨日と違っているか、前日のPDFのがなければ ${UPDIR}/プロセスID を作成し、ダウンロードしたPDFファイルをコピーする (ボツ)
+  ##--@--## 前日のPDFのがなければ ${UPDIR}/プロセスID を作成し、ダウンロードしたPDFファイルをコピーする
+  if [ ! -f ${YDAYPDF} ];
+  then
+    mkdir -p ${UPDIR}/${$}
+    cp -p ${DATEDIR}/${BASENAME} ${UPDIR}/${$}/
+  else
+    if [ ! ${TODAYPDFSUM} = ${YDAYPDFSUM} ];
+    then
+      mkdir -p ${UPDIR}/${$}
+      cp -p ${DATEDIR}/${BASENAME} ${UPDIR}/${$}/
+    fi
+  fi
 done
 
-##--@--## PDFを1枚にまとめる
-pdftk ${UPDIR}/${$}/* cat output ${UPFILE}
+##--@--## もし${UPDIR}/プロセスID ができていればPDFを1枚にまとめる
+if [ -d ${UPDIR}/${$} ];
+then
+  pdftk ${UPDIR}/${$}/* cat output ${UPFILE}
+fi
 
-##--@--## PDFまとめが正常終了したらログに記録し、メール送信と後処理を行う
-if [ 0 = $(echo $?) ];
+##--@--## ${UPFILE} 生成結果をログに記録し、メール送信と後処理を行う
+if [ -f ${UPFILE} ];
 then
 ##--@--## PDFまとめ結果をログに格納する
 echo -e "\
@@ -125,3 +171,6 @@ export LANG=C               # 文字コードを元に戻す
 ##--@--## テンポラリディレクトリを削除する
 rm -fr ${UPDIR}/${$} 
 fi
+
+##--@--## 一時ファイルを削除する
+rm -f ${TMPHEADER} ${TMPHTML}
