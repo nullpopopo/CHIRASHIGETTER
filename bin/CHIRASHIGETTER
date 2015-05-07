@@ -18,20 +18,22 @@ TODAY=$(date +%Y%m%d)
 YDAY=$(date +%Y%m%d --date="1 days ago")
 THISMON=$(date +%Y%m)
 LASTMON=$(date +%Y%m --date="1 month ago")
+FULLDATE="$(date "+%Y/%m/%d %H:%M:%S")"
 
 TMPDIR=${HOME}/tmp
 TMPHEADER=${TMPDIR}/${PROGNAME}_${FQDN}_HEADER_$$
 TMPHTML=${TMPDIR}/${PROGNAME}_${FQDN}_HTML_$$
 
-UPDIR=${HOME}/Dropbox/${PROGNAME}/${CHAIN}
-UPFILE=${UPDIR}/${CHAIN}_${STORE}_${TODAY}.pdf
+UPDIR=${HOME}/Dropbox/${PROGNAME}/${CHAIN}/${STORE}
+UPFILE=${UPDIR}/${TODAY}_${CHAIN}_${STORE}.pdf
 LOGDIR=${HOME}/Dropbox/${PROGNAME}/logs
-#LOGDIR=${HOME}/Dropbox/${PROGNAME}/.logs # for debug
 NOWLOG=${LOGDIR}/${PROGNAME}_${THISMON}.log
 OLDLOG=${LOGDIR}/${PROGNAME}_${LASTMON}.log
+FLAGDIR=${HOME}/Dropbox/${PROGNAME}/flags/${CHAIN}/${STORE}
+FLAGFILE=${FLAGDIR}/LASTMSG.txt
 
-##--@--## ログディレクトリと一時ファイル用ディレクトリがなければ作成する
-mkdir -p ${LOGDIR} ${TMPDIR}
+##--@--## ログディレクトリと一時ファイル用ディレクトリとフラグディレクトリがなければ作成する
+mkdir -p ${LOGDIR} ${TMPDIR} ${FLAGDIR}
 
 ##--@--## 先月ぶんのログがあればgzip圧縮する
 [ -f ${OLDLOG} ] && gzip ${OLDLOG}
@@ -84,19 +86,20 @@ md5sum\t\
 ${LASTMOD}" | tee -a ${NOWLOG}
 fi
 
-
 ##--@--## 前回実行時のLASTMODを変数LAST0に格納する
 LAST0=$(cat ${NOWLOG} | grep ${URI} | tail -n 2 | head -n 1 | awk '{print $NF}')
 ##--@--## 今回実行時のLASTMODを変数LAST1に格納する
 LAST1=$(cat ${NOWLOG} | grep ${URI} | tail -n 1 | awk '{print $NF}')
 
-##--@--## 前回実行時と更新日時が合致しなければ、PDFにリンクしているページの更新をメール通知する
+##--@--## 前回実行時と更新日時が合致しなければ(更新を検知すれば)、PDFにリンクしているページの更新をメール通知し、フラグファイルを生成する。更新を検知しなければ特に何もしない。
 if [ ! ${LAST0} = ${LAST1} ];
 then
-  export LANG=ja_JP.utf8      # gmailのnoname対策で文字コードを一時的に日本語にする
-  echo -e "${CHAIN} ${STORE} のページが更新されました\n$(date)\n${URI}" | \
-  mail -s "[${PROGNAME}] $(LANG=C date) Notification" ${MAILTO}
-  export LANG=C               # 文字コードを元に戻す
+  LANG=ja_JP.utf8 ; export LANG       # gmailのnoname対策で文字コードを一時的に日本語にする
+  LC_ALL=ja_JP.utf8 ; export LC_ALL   # gmailのnoname対策で文字コードを一時的に日本語にする
+  echo -e "${CHAIN} ${STORE} のページが更新されました\n${FULLDATE}\n${URI}" | tee ${FLAGFILE} | \
+  mail -s "[${PROGNAME}] ${FULLDATE} Notification" ${MAILTO}
+  LANG=C ; export LANG                # 文字コードを元に戻す
+  LC_ALL=C ; export LC_ALL            # 文字コードを元に戻す
 fi
 
 ##--@--## 巡回先にチラシPDFがリンクされていなければ異常終了させる
@@ -129,17 +132,24 @@ do
   curl -o ${TODAYPDF} ${A}
   TODAYPDFSUM=$(md5sum ${TODAYPDF} | awk '{print $1}')
   YDAYPDFSUM=$(md5sum ${YDAYPDF} | awk '{print $1}')
-  ##--@--## ダウンロードしたファイルのmd5sum値が昨日と違っているか、前日のPDFのがなければ ${UPDIR}/プロセスID を作成し、ダウンロードしたPDFファイルをコピーする (ボツ)
-  ##--@--## 前日のPDFのがなければ ${UPDIR}/プロセスID を作成し、ダウンロードしたPDFファイルをコピーする
+  ##--@--## 前日のPDFがなければ ${UPDIR}/プロセスID を作成し、ダウンロードしたPDFファイルをコピーする
   if [ ! -f ${YDAYPDF} ];
   then
+    FILETYPE=$(file ${DATEDIR}/${BASENAME}  | grep "PDF document" | awk '{print $2}')
     mkdir -p ${UPDIR}/${$}
-    cp -p ${DATEDIR}/${BASENAME} ${UPDIR}/${$}/
+    if [ ${FILETYPE} = PDF ];
+    then
+      cp -p ${DATEDIR}/${BASENAME} ${UPDIR}/${$}/
+    fi
   else
     if [ ! ${TODAYPDFSUM} = ${YDAYPDFSUM} ];
     then
+      FILETYPE=$(file ${DATEDIR}/${BASENAME}  | grep "PDF document" | awk '{print $2}')
       mkdir -p ${UPDIR}/${$}
-      cp -p ${DATEDIR}/${BASENAME} ${UPDIR}/${$}/
+      if [ ${FILETYPE} = PDF ];
+      then
+        cp -p ${DATEDIR}/${BASENAME} ${UPDIR}/${$}/
+      fi
     fi
   fi
 done
@@ -164,13 +174,16 @@ $(basename $(dirname ${UPFILE}))/$(basename ${UPFILE})\t\
 PDF Created\t\
 $(md5sum ${UPFILE} | awk '{print $1}')" | tee -a ${NOWLOG}
 ##--@--## PDFまとめ結果をメール送信する
-export LANG=ja_JP.utf8      # gmailのnoname対策で文字コードを一時的に日本語にする
-echo -e "${CHAIN} ${STORE} のチラシをDropboxに格納しました\n$(date)\n" | \
-mail -s "[${PROGNAME}] $(LANG=C date) PDF Created" ${MAILTO}
-export LANG=C               # 文字コードを元に戻す
+LANG=ja_JP.utf8 ; export LANG       # gmailのnoname対策で文字コードを一時的に日本語にする
+LC_ALL=ja_JP.utf8 ; export LC_ALL   # gmailのnoname対策で文字コードを一時的に日本語にする
+echo -e "${CHAIN} ${STORE} のチラシが更新されました\n${FULLDATE}\n" | \
+mail -s "[${PROGNAME}] ${FULLDATE} PDF Created" ${MAILTO}
+LANG=C ; export LANG                # 文字コードを元に戻す
+LC_ALL=C ; export LC_ALL            # 文字コードを元に戻す
 ##--@--## テンポラリディレクトリを削除する
 rm -fr ${UPDIR}/${$} 
 fi
 
 ##--@--## 一時ファイルを削除する
-rm -f ${TMPHEADER} ${TMPHTML}
+rm -f ${TMPHEADER}
+rm -f ${TMPHTML}
