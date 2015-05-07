@@ -96,7 +96,7 @@ if [ ! ${LAST0} = ${LAST1} ];
 then
   LANG=ja_JP.utf8 ; export LANG       # gmailのnoname対策で文字コードを一時的に日本語にする
   LC_ALL=ja_JP.utf8 ; export LC_ALL   # gmailのnoname対策で文字コードを一時的に日本語にする
-  echo -e "${CHAIN} ${STORE} のページが更新されました\n${FULLDATE}\n${URI}" | tee ${FLAGFILE} | \
+  echo -e "${CHAIN} ${STORE} のページが更新されました\n${FULLDATE}\n${URI}\n" | tee ${FLAGFILE} | \
   mail -s "[${PROGNAME}] ${FULLDATE} Notification" ${MAILTO}
   LANG=C ; export LANG                # 文字コードを元に戻す
   LC_ALL=C ; export LC_ALL            # 文字コードを元に戻す
