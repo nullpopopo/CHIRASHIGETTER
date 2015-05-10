@@ -103,7 +103,7 @@ then
 fi
 
 ##--@--## 巡回先にチラシPDFがリンクされていなければ異常終了させる
-[ ! 0 = $(curl -s ${URI} | grep -i href | grep -i pdf > /dev/null ; echo $?) ] && exit 1
+[ ! 0 = $(curl -s ${URI} | grep -iv adobe | grep -i href | grep -i pdf > /dev/null ; echo $?) ] && exit 1
 ##--@--## すでにまとめチラシが生成されていれば異常終了させる
 [ -f ${UPFILE} ] && exit 1
 ##--@--## PDFのURIを変数に格納する
@@ -112,10 +112,12 @@ PDFURI=()
 PDFURI=($(curl -s ${URI} | \
 nkf -w | \
 grep -i pdf | \
+grep -iv adobe | \
 awk '{for (i=1;i<=NF;i++) {if ($i ~ /pdf/) IGNORECASE = 1; {print $i}}}' | \
 grep -i "href" | \
-sed -e "s/href=\"\.\./${DIRNAME}/g;s/\"//g"
+sed -e "s/href=\"\.\./${DIRNAME}/i;s/\"//i"
 ))
+
 ##--@--## リンクされたPDFのURIごとにループさせて巡回取得する
 for A in ${PDFURI[@]}
 do
@@ -185,5 +187,4 @@ rm -fr ${UPDIR}/${$}
 fi
 
 ##--@--## 一時ファイルを削除する
-rm -f ${TMPHEADER}
-rm -f ${TMPHTML}
+rm -f ${TMPHEADER} ${TMPHTML}
