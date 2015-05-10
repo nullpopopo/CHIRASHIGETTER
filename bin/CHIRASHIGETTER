@@ -91,6 +91,9 @@ LAST0=$(cat ${NOWLOG} | grep ${URI} | tail -n 2 | head -n 1 | awk '{print $NF}')
 ##--@--## 今回実行時のLASTMODを変数LAST1に格納する
 LAST1=$(cat ${NOWLOG} | grep ${URI} | tail -n 1 | awk '{print $NF}')
 
+##--@--## 一時ファイルを削除する
+rm -f ${TMPHEADER} ${TMPHTML}
+
 ##--@--## 前回実行時と更新日時が合致しなければ(更新を検知すれば)、PDFにリンクしているページの更新をメール通知し、フラグファイルを生成する。更新を検知しなければ特に何もしない。
 if [ ! ${LAST0} = ${LAST1} ];
 then
@@ -185,6 +188,3 @@ LC_ALL=C ; export LC_ALL            # 文字コードを元に戻す
 ##--@--## テンポラリディレクトリを削除する
 rm -fr ${UPDIR}/${$} 
 fi
-
-##--@--## 一時ファイルを削除する
-rm -f ${TMPHEADER} ${TMPHTML}
